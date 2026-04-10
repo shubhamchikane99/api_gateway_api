@@ -1,0 +1,85 @@
+server:
+  port: 8080
+
+spring:
+  application:
+    name: api-gateway
+  cloud:
+    gateway:
+      discovery:
+        locator:
+          enabled: true
+          lower-case-service-id: true
+
+      default-filters:
+        - DedupeResponseHeader=Access-Control-Allow-Credentials Access-Control-Allow-Origin RETAIN_FIRST
+
+      globalcors:
+        cors-configurations:
+          '[/**]':
+            allowed-origins: ${ALLOWED_ORIGINS:http://localhost:3000,http://localhost:4200}
+            allowed-methods: GET,POST,PUT,DELETE,PATCH,OPTIONS
+            allowed-headers: "*"
+            allow-credentials: true
+            max-age: 3600
+
+      routes:
+        - id: auth-service-public
+          uri: lb://auth-service
+          predicates:
+            - Path=/api/public/**
+          filters:
+            - RewritePath=/api/(?<segment>.*), /${segment}
+            - name: CircuitBreaker
+              args:
+                name: auth-circuit-breaker
+                fallbackUri: forward:/fallback/auth
+
+        - id: auth-service-secured
+          uri: lb://auth-service
+          predicates:
+            - Path=/api/auth/**
+          filters:
+            - JwtAuthenticationFilter
+            - RewritePath=/api/auth/(?<segment>.*), /${segment}
+            - name: CircuitBreaker
+              args:
+                name: auth-circuit-breaker
+                fallbackUri: forward:/fallback/auth
+
+        - id: main-service
+          uri: lb://crm-service
+          predicates:
+            - Path=/api/crm/**
+          filters:
+            - JwtAuthenticationFilter
+            - TenantContextFilter
+            - RewritePath=/api/crm/(?<segment>.*), /${segment}
+            - name: CircuitBreaker
+              args:
+                name: main-circuit-breaker
+                fallbackUri: forward:/fallback/main
+            - name: Retry
+              args:
+                retries: 3
+                statuses: BAD_GATEWAY,SERVICE_UNAVAILABLE
+                methods: GET
+                backoff:
+                  firstBackoff: 100ms
+                  maxBackoff: 500ms
+                  factor: 2
+
+eureka:
+  client:
+    service-url:
+      defaultZone: http://${EUREKA_USER:test}:${EUREKA_PASSWORD:test}@${EUREKA_HOST:localhost}:8761/eureka/
+  instance:
+    prefer-ip-address: true
+
+jwt:
+  secret: ${JWT_SECRET:my-super-secret-key-my-super-secret-key-my-super-secret-key-1234567890}
+  expiration: ${JWT_EXPIRATION:86400000}
+
+logging:
+  level:
+    org.springframework.cloud.gateway: DEBUG
